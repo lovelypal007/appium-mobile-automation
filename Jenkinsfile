@@ -1,3 +1,4 @@
+
 pipeline {
     agent any
 
@@ -20,28 +21,110 @@ pipeline {
             }
         }
 
-stage('Verify Environment') {
-    steps {
-        bat '''
-            node --version
-            npm --version
-            java -version
-            adb version
+        stage('Verify Environment') {
+            steps {
+                bat '''
+                    node --version
+                    npm --version
+                    java -version
+                    adb version
 
-            echo Checking Appium...
-            npx appium --version
-            npx appium driver list --installed
+                    echo Checking Appium...
+                    npx appium --version
+                    npx appium driver list --installed
 
-            allure --version
+                    echo Checking Allure...
+                    npx allure --version
 
-            echo Checking Android Emulator...
-            adb -s %ANDROID_SERIAL% get-state
+                    echo Checking Android Emulator...
+                    adb -s %ANDROID_SERIAL% get-state
 
-            echo Checking emulator boot status...
-            adb -s %ANDROID_SERIAL% shell getprop sys.boot_completed
-        '''
+                    echo Checking emulator boot status...
+                    adb -s %ANDROID_SERIAL% shell getprop sys.boot_completed
+                '''
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                bat 'npm ci'
+            }
+        }
+
+        stage('Start Appium Server') {
+            steps {
+                powershell '''
+                    $ErrorActionPreference = "Stop"
+                    $url = "http://$env:APPIUM_HOST`:$env:APPIUM_PORT/status"
+
+                    try {
+                        Invoke-RestMethod -Uri $url -TimeoutSec 3
+                        Write-Host "Appium server is already running."
+                    }
+                    catch {
+                        Write-Host "Starting Appium server..."
+
+                        $log = Join-Path $PWD "appium-server.log"
+                        $errorLog = Join-Path $PWD "appium-server-error.log"
+                        $appium = Join-Path $PWD "node_modules\\.bin\\appium.cmd"
+
+                        if (-not (Test-Path $appium)) {
+                            throw "Local Appium executable not found!"
+                        }
+
+                        Start-Process `
+                            -FilePath "cmd.exe" `
+                            -ArgumentList "/c", "`"$appium`" --address $env:APPIUM_HOST --port $env:APPIUM_PORT" `
+                            -WorkingDirectory $PWD.Path `
+                            -RedirectStandardOutput $log `
+                            -RedirectStandardError $errorLog `
+                            -WindowStyle Hidden
+
+                        $ready = $false
+
+                        for ($i = 0; $i -lt 30; $i++) {
+                            Start-Sleep -Seconds 2
+
+                            try {
+                                Invoke-RestMethod -Uri $url -TimeoutSec 3
+                                $ready = $true
+                                break
+                            }
+                            catch {
+                                Write-Host "Waiting for Appium server... ($($i + 1)/30)"
+                            }
+                        }
+
+                        if (-not $ready) {
+                            if (Test-Path $log) { Get-Content $log }
+                            if (Test-Path $errorLog) { Get-Content $errorLog }
+                            throw "Appium server did not become ready."
+                        }
+                    }
+
+                    Write-Host "Appium server is ready!"
+                '''
+            }
+        }
+
+        stage('Settings Tests') {
+            steps {
+                bat 'npm run test:settings'
+            }
+        }
+
+        stage('Login Tests') {
+            steps {
+                bat 'npm run test:login'
+            }
+        }
+
+        stage('YouTube Tests') {
+            steps {
+                bat 'npm run test:youtube'
+            }
+        }
     }
-}
 
     post {
         always {
@@ -65,5 +148,4 @@ stage('Verify Environment') {
             echo 'One or more Appium test suites failed. Check the Console Output.'
         }
     }
-}
 }
