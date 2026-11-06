@@ -1,0 +1,11 @@
+node_modules/
+dist/
+reports/
+allure-results/
+allure-report/
+
+.env
+*.log
+
+.idea/
+.vscode/
